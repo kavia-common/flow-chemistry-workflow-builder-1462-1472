@@ -151,6 +151,41 @@ echo ""
 echo "Environment variables saved to db_visualizer/postgres.env"
 echo "To use with Node.js viewer, run: source db_visualizer/postgres.env"
 
+# Schema creation and minimal seed data
+echo "Applying schema migrations (single statements) and seeding minimal data..."
+
+# Helper: run a single SQL statement via psql with app user
+PSQL_CMD="psql postgresql://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/${DB_NAME}"
+
+# Create tables (each in its own statement)
+${PSQL_CMD} -c "CREATE TABLE IF NOT EXISTS experiments (id SERIAL PRIMARY KEY, name TEXT NOT NULL, description TEXT, created_at TIMESTAMPTZ DEFAULT NOW());" || true
+${PSQL_CMD} -c "CREATE TABLE IF NOT EXISTS steps (id SERIAL PRIMARY KEY, experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE, step_order INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, created_at TIMESTAMPTZ DEFAULT NOW());" || true
+${PSQL_CMD} -c "CREATE TABLE IF NOT EXISTS reagents (id SERIAL PRIMARY KEY, name TEXT NOT NULL, cas_number TEXT, vendor TEXT, created_at TIMESTAMPTZ DEFAULT NOW());" || true
+${PSQL_CMD} -c "CREATE TABLE IF NOT EXISTS parameters (id SERIAL PRIMARY KEY, step_id INTEGER NOT NULL REFERENCES steps(id) ON DELETE CASCADE, key TEXT NOT NULL, value TEXT, unit TEXT, created_at TIMESTAMPTZ DEFAULT NOW());" || true
+${PSQL_CMD} -c "CREATE TABLE IF NOT EXISTS run_logs (id SERIAL PRIMARY KEY, experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE, status TEXT NOT NULL, message TEXT, created_at TIMESTAMPTZ DEFAULT NOW());" || true
+${PSQL_CMD} -c "CREATE TABLE IF NOT EXISTS step_reagents (id SERIAL PRIMARY KEY, step_id INTEGER NOT NULL REFERENCES steps(id) ON DELETE CASCADE, reagent_id INTEGER NOT NULL REFERENCES reagents(id) ON DELETE RESTRICT, amount TEXT, unit TEXT, created_at TIMESTAMPTZ DEFAULT NOW());" || true
+
+# Seed minimal data (each INSERT is a single statement)
+# Only insert if table is empty to avoid duplicates across restarts
+${PSQL_CMD} -c "INSERT INTO experiments (name, description) SELECT 'Test Experiment', 'Minimal seeded experiment' WHERE NOT EXISTS (SELECT 1 FROM experiments);" || true
+
+# Create a first step linked to experiment id 1 if steps table is empty
+${PSQL_CMD} -c "INSERT INTO steps (experiment_id, step_order, name, description) SELECT id, 1, 'Mix', 'Combine reagents' FROM experiments ORDER BY id LIMIT 1 WHERE NOT EXISTS (SELECT 1 FROM steps);" || true
+
+# Seed reagents if empty
+${PSQL_CMD} -c "INSERT INTO reagents (name, cas_number, vendor) SELECT 'Water', '7732-18-5', 'Generic' WHERE NOT EXISTS (SELECT 1 FROM reagents);" || true
+
+# Link step to reagent if none exists
+${PSQL_CMD} -c "INSERT INTO step_reagents (step_id, reagent_id, amount, unit) SELECT s.id, r.id, '10', 'mL' FROM steps s CROSS JOIN reagents r ORDER BY s.id, r.id LIMIT 1 WHERE NOT EXISTS (SELECT 1 FROM step_reagents);" || true
+
+# Seed a parameter if none exists
+${PSQL_CMD} -c "INSERT INTO parameters (step_id, key, value, unit) SELECT s.id, 'temperature', '25', 'C' FROM steps s ORDER BY s.id LIMIT 1 WHERE NOT EXISTS (SELECT 1 FROM parameters);" || true
+
+# Seed a run_log if none exists
+${PSQL_CMD} -c "INSERT INTO run_logs (experiment_id, status, message) SELECT e.id, 'created', 'Initial log entry' FROM experiments e ORDER BY e.id LIMIT 1 WHERE NOT EXISTS (SELECT 1 FROM run_logs);" || true
+
+echo "Schema and seed operations attempted. If the database was not yet reachable on port ${DB_PORT}, rerun this script after the server is ready."
+
 echo "To connect to the database, use one of the following commands:"
 echo "psql -h localhost -U ${DB_USER} -d ${DB_NAME} -p ${DB_PORT}"
 echo "$(cat db_connection.txt)"
